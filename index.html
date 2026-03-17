@@ -172,6 +172,10 @@
       gap: 12px;
     }
 
+    button.wide {
+      grid-column: 1 / -1;
+    }
+
     button {
       appearance: none;
       border: 0;
@@ -216,6 +220,7 @@
       align-items: center;
       justify-content: space-between;
       gap: 12px;
+      flex-wrap: wrap;
       margin-bottom: 12px;
     }
 
@@ -229,6 +234,17 @@
     .panel-note {
       color: var(--muted);
       font-size: 0.82rem;
+    }
+
+    .close-camera {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.12);
+      color: #fffdf8;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
     }
 
     .scanner-wrap {
@@ -316,6 +332,85 @@
       color: var(--text);
     }
 
+    .list-note {
+      margin: 10px 2px 0;
+      color: var(--muted);
+      font-size: 0.84rem;
+      line-height: 1.4;
+    }
+
+    body.camera-fullscreen {
+      overflow: hidden;
+    }
+
+    #cameraPanel.fullscreen {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      margin: 0;
+      padding:
+        calc(var(--safe-top) + 10px)
+        14px
+        calc(var(--safe-bottom) + 14px);
+      border-radius: 0;
+      width: 100vw;
+      height: 100svh;
+      display: flex;
+      flex-direction: column;
+      background: rgba(18, 24, 34, 0.97);
+      border: 0;
+      box-shadow: none;
+    }
+
+    #cameraPanel.fullscreen .panel-title,
+    #cameraPanel.fullscreen .panel-note,
+    #cameraPanel.fullscreen .status {
+      color: #fffdf8;
+    }
+
+    #cameraPanel.fullscreen .panel-note {
+      opacity: 0.78;
+    }
+
+    #cameraPanel.fullscreen .close-camera {
+      display: inline-flex;
+    }
+
+    #cameraPanel.fullscreen .scanner-wrap {
+      flex: 1;
+      min-height: 0;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.08)),
+        #05070b;
+      border-color: rgba(255, 255, 255, 0.08);
+    }
+
+    #cameraPanel.fullscreen #reader,
+    #cameraPanel.fullscreen #reader video {
+      min-height: 100%;
+      height: 100%;
+      border-radius: 28px;
+    }
+
+    #cameraPanel.fullscreen .status {
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    #cameraPanel.fullscreen .status.success {
+      background: rgba(27, 143, 90, 0.2);
+      color: #d6ffe9;
+    }
+
+    #cameraPanel.fullscreen .status.warning {
+      background: rgba(189, 109, 0, 0.22);
+      color: #ffe0a6;
+    }
+
+    #cameraPanel.fullscreen .status.error {
+      background: rgba(191, 47, 60, 0.24);
+      color: #ffd8dd;
+    }
+
     @keyframes rise-in {
       from {
         opacity: 0;
@@ -366,12 +461,14 @@
         <button id="stopButton" class="secondary" type="button" disabled>Stop camera</button>
         <button id="copyButton" class="utility" type="button" disabled>Copy all</button>
         <button id="clearButton" class="utility" type="button" disabled>Clear list</button>
+        <button id="fullscreenButton" class="utility wide" type="button">Open full camera</button>
       </div>
     </section>
 
-    <section class="card panel">
+    <section id="cameraPanel" class="card panel">
       <div class="panel-heading">
         <h2 class="panel-title">Camera</h2>
+        <button id="closeFullscreenButton" class="close-camera" type="button">Close camera</button>
         <div class="panel-note">Best on HTTPS or GitHub Pages</div>
       </div>
       <div class="scanner-wrap">
@@ -388,12 +485,12 @@
       <textarea
         id="imeiList"
         placeholder="Scanned IMEIs will appear here."
-        readonly
         spellcheck="false"
         autocapitalize="off"
         autocomplete="off"
         autocorrect="off"
       ></textarea>
+      <p class="list-note">Edit or delete lines directly. Changes save automatically.</p>
     </section>
 
     <p class="footer-note">
@@ -417,10 +514,13 @@
     const stopButton = document.getElementById("stopButton");
     const copyButton = document.getElementById("copyButton");
     const clearButton = document.getElementById("clearButton");
+    const fullscreenButton = document.getElementById("fullscreenButton");
+    const closeFullscreenButton = document.getElementById("closeFullscreenButton");
     const statusElement = document.getElementById("status");
     const counterValue = document.getElementById("counterValue");
     const counterUnit = document.getElementById("counterUnit");
     const imeiList = document.getElementById("imeiList");
+    const cameraPanel = document.getElementById("cameraPanel");
 
     function normalizeValue(value) {
       return String(value || "")
@@ -445,21 +545,11 @@
       state.seen = seen;
     }
 
-    function getSupportedFormats() {
-      if (typeof Html5QrcodeSupportedFormats === "undefined") {
-        return null;
-      }
-
-      return [
-        Html5QrcodeSupportedFormats.CODE_128,
-        Html5QrcodeSupportedFormats.CODE_39,
-        Html5QrcodeSupportedFormats.EAN_13,
-        Html5QrcodeSupportedFormats.EAN_8,
-        Html5QrcodeSupportedFormats.UPC_A,
-        Html5QrcodeSupportedFormats.UPC_E,
-        Html5QrcodeSupportedFormats.QR_CODE,
-        Html5QrcodeSupportedFormats.DATA_MATRIX
-      ];
+    function parseItemsFromText(value) {
+      return String(value || "")
+        .split(/\r?\n/)
+        .map((line) => normalizeValue(line))
+        .filter(Boolean);
     }
 
     function saveItems() {
@@ -470,13 +560,17 @@
       }
     }
 
-    function renderList() {
-      imeiList.value = state.items.join("\n");
-      imeiList.scrollTop = imeiList.scrollHeight;
+    function updateListMeta() {
       counterValue.textContent = String(state.items.length);
       counterUnit.textContent = state.items.length === 1 ? "unique scan" : "unique scans";
       copyButton.disabled = state.items.length === 0;
       clearButton.disabled = state.items.length === 0;
+    }
+
+    function renderList() {
+      imeiList.value = state.items.join("\n");
+      imeiList.scrollTop = imeiList.scrollHeight;
+      updateListMeta();
     }
 
     function setStatus(message, tone) {
@@ -490,6 +584,37 @@
       stopButton.disabled = !isRunning;
     }
 
+    function enterFullscreenCamera() {
+      document.body.classList.add("camera-fullscreen");
+      cameraPanel.classList.add("fullscreen");
+    }
+
+    function exitFullscreenCamera() {
+      document.body.classList.remove("camera-fullscreen");
+      cameraPanel.classList.remove("fullscreen");
+    }
+
+    function syncListFromTextarea(normalizeDisplay) {
+      rebuildState(parseItemsFromText(imeiList.value));
+      saveItems();
+
+      if (normalizeDisplay) {
+        const caretStart = imeiList.selectionStart;
+        const caretEnd = imeiList.selectionEnd;
+        imeiList.value = state.items.join("\n");
+
+        if (typeof caretStart === "number" && typeof caretEnd === "number") {
+          const maxPosition = imeiList.value.length;
+          imeiList.setSelectionRange(
+            Math.min(caretStart, maxPosition),
+            Math.min(caretEnd, maxPosition)
+          );
+        }
+      }
+
+      updateListMeta();
+    }
+
     function loadItems() {
       try {
         const raw = localStorage.getItem(STORAGE_KEY);
@@ -500,6 +625,12 @@
         setStatus("Saved list could not be loaded, so a fresh list was started.", "warning");
       }
       renderList();
+    }
+
+    function vibrateOnScan() {
+      if ("vibrate" in navigator) {
+        navigator.vibrate([80, 30, 80]);
+      }
     }
 
     function addScan(value) {
@@ -518,9 +649,7 @@
       saveItems();
       renderList();
 
-      if ("vibrate" in navigator) {
-        navigator.vibrate(60);
-      }
+      vibrateOnScan();
 
       setStatus("Added " + normalized + ".", "success");
     }
@@ -564,14 +693,8 @@
         const scannerConfig = {
           fps: 10,
           aspectRatio: 1.7778,
-          qrbox: { width: 280, height: 120 },
           rememberLastUsedCamera: true
         };
-
-        const supportedFormats = getSupportedFormats();
-        if (supportedFormats) {
-          scannerConfig.formatsToSupport = supportedFormats;
-        }
 
         await state.scanner.start(
           camera,
@@ -584,7 +707,7 @@
           }
         );
 
-        setStatus("Camera is live. Line up the barcode inside the frame.", "");
+        setStatus("Camera is live. Line up any barcode in view.", "");
       } catch (error) {
         setRunning(false);
         if (state.scanner) {
@@ -602,8 +725,15 @@
       }
     }
 
-    async function stopCamera() {
+    async function stopCamera(options) {
+      const settings = options || {};
+      const shouldExitFullscreen = Boolean(settings.exitFullscreen);
+      const message = settings.message || "Camera stopped. Your scanned list is still saved on this device.";
+
       if (!state.running || !state.scanner) {
+        if (shouldExitFullscreen) {
+          exitFullscreenCamera();
+        }
         return;
       }
 
@@ -621,10 +751,43 @@
 
       state.scanner = null;
       setRunning(false);
-      setStatus("Camera stopped. Your scanned list is still saved on this device.", "");
+      if (shouldExitFullscreen) {
+        exitFullscreenCamera();
+      }
+      setStatus(message, "");
+    }
+
+    async function openFullscreenCameraView() {
+      enterFullscreenCamera();
+
+      if (state.running) {
+        setStatus("Camera is live. Line up the barcode anywhere in view.", "");
+        return;
+      }
+
+      await startCamera();
+
+      if (!state.running) {
+        exitFullscreenCamera();
+      }
+    }
+
+    async function closeFullscreenCameraView() {
+      if (state.running) {
+        await stopCamera({
+          exitFullscreen: true,
+          message: "Camera closed. Your scanned list is still saved on this device."
+        });
+        return;
+      }
+
+      exitFullscreenCamera();
+      setStatus("Camera closed. Your scanned list is still saved on this device.", "");
     }
 
     async function copyAll() {
+      syncListFromTextarea(true);
+
       if (state.items.length === 0) {
         setStatus("There is nothing to copy yet.", "warning");
         return;
@@ -636,12 +799,15 @@
         await navigator.clipboard.writeText(text);
         setStatus("Copied " + state.items.length + " IMEI" + (state.items.length === 1 ? "" : "s") + ".", "success");
       } catch (error) {
-        imeiList.removeAttribute("readonly");
+        const wasReadOnly = imeiList.hasAttribute("readonly");
         imeiList.focus();
         imeiList.select();
         imeiList.setSelectionRange(0, imeiList.value.length);
         const copied = typeof document.execCommand === "function" && document.execCommand("copy");
-        imeiList.setAttribute("readonly", "readonly");
+
+        if (wasReadOnly) {
+          imeiList.setAttribute("readonly", "readonly");
+        }
 
         if (copied) {
           setStatus("Copied " + state.items.length + " IMEI" + (state.items.length === 1 ? "" : "s") + ".", "success");
@@ -652,6 +818,8 @@
     }
 
     function clearList() {
+      syncListFromTextarea(true);
+
       if (state.items.length === 0) {
         return;
       }
@@ -668,9 +836,21 @@
     }
 
     startButton.addEventListener("click", startCamera);
-    stopButton.addEventListener("click", stopCamera);
+    stopButton.addEventListener("click", () => {
+      stopCamera({
+        exitFullscreen: cameraPanel.classList.contains("fullscreen")
+      });
+    });
     copyButton.addEventListener("click", copyAll);
     clearButton.addEventListener("click", clearList);
+    fullscreenButton.addEventListener("click", openFullscreenCameraView);
+    closeFullscreenButton.addEventListener("click", closeFullscreenCameraView);
+    imeiList.addEventListener("input", () => {
+      syncListFromTextarea(false);
+    });
+    imeiList.addEventListener("blur", () => {
+      syncListFromTextarea(true);
+    });
 
     window.addEventListener("beforeunload", () => {
       if (state.running && state.scanner) {
