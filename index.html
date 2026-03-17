@@ -111,6 +111,37 @@
       box-shadow: 0 0 0 6px rgba(255, 111, 61, 0.14);
     }
 
+    .hero-topline {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .version-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(27, 34, 48, 0.94);
+      color: #fffdf8;
+      font-size: 0.82rem;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .version-chip::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #8fffbe;
+      box-shadow: 0 0 0 6px rgba(143, 255, 190, 0.12);
+    }
+
     h1 {
       margin: 16px 0 8px;
       font-size: clamp(2rem, 6vw, 2.6rem);
@@ -439,7 +470,10 @@
 <body>
   <main class="app-shell">
     <section class="card hero">
-      <div class="eyebrow">Mobile Web App</div>
+      <div class="hero-topline">
+        <div class="eyebrow">Mobile Web App</div>
+        <div id="versionChip" class="version-chip">Version 4</div>
+      </div>
       <h1>IMEI Scanner</h1>
       <p class="subtitle">
         Scan device barcodes with your iPhone camera and keep a clean, deduplicated list ready to copy.
@@ -499,6 +533,7 @@
 
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <script>
+    const APP_VERSION = "Version 4";
     const STORAGE_KEY = "imei-scanner-items";
 
     const state = {
@@ -519,6 +554,7 @@
     const counterUnit = document.getElementById("counterUnit");
     const imeiList = document.getElementById("imeiList");
     const cameraPanel = document.getElementById("cameraPanel");
+    const versionChip = document.getElementById("versionChip");
 
     function normalizeValue(value) {
       return String(value || "")
@@ -652,6 +688,49 @@
       setStatus("Added " + normalized + ".", "success");
     }
 
+    function getAllSupportedFormats() {
+      if (typeof Html5QrcodeSupportedFormats === "undefined") {
+        return null;
+      }
+
+      return [
+        Html5QrcodeSupportedFormats.QR_CODE,
+        Html5QrcodeSupportedFormats.AZTEC,
+        Html5QrcodeSupportedFormats.CODABAR,
+        Html5QrcodeSupportedFormats.CODE_39,
+        Html5QrcodeSupportedFormats.CODE_93,
+        Html5QrcodeSupportedFormats.CODE_128,
+        Html5QrcodeSupportedFormats.DATA_MATRIX,
+        Html5QrcodeSupportedFormats.MAXICODE,
+        Html5QrcodeSupportedFormats.ITF,
+        Html5QrcodeSupportedFormats.EAN_13,
+        Html5QrcodeSupportedFormats.EAN_8,
+        Html5QrcodeSupportedFormats.PDF_417,
+        Html5QrcodeSupportedFormats.RSS_14,
+        Html5QrcodeSupportedFormats.RSS_EXPANDED,
+        Html5QrcodeSupportedFormats.UPC_A,
+        Html5QrcodeSupportedFormats.UPC_E,
+        Html5QrcodeSupportedFormats.UPC_EAN_EXTENSION
+      ].filter(Boolean);
+    }
+
+    function createScannerConfig() {
+      const config = {
+        verbose: false,
+        useBarCodeDetectorIfSupported: false,
+        experimentalFeatures: {
+          useBarCodeDetectorIfSupported: false
+        }
+      };
+
+      const formats = getAllSupportedFormats();
+      if (formats) {
+        config.formatsToSupport = formats;
+      }
+
+      return config;
+    }
+
     function scoreCameraLabel(label) {
       const normalized = String(label || "").toLowerCase();
       let score = 0;
@@ -683,6 +762,52 @@
       const touchMac = navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
 
       return /iphone|ipad|ipod/i.test(userAgent) || touchMac;
+    }
+
+    async function optimizeRunningCameraForBarcode() {
+      if (!state.scanner || !state.running) {
+        return [];
+      }
+
+      try {
+        const capabilities = state.scanner.getRunningTrackCapabilities();
+        const settings = state.scanner.getRunningTrackSettings();
+        const advanced = [];
+        const optimizations = [];
+
+        if (Array.isArray(capabilities.focusMode)) {
+          if (capabilities.focusMode.includes("continuous")) {
+            advanced.push({ focusMode: "continuous" });
+            optimizations.push("continuous focus");
+          } else if (capabilities.focusMode.includes("auto")) {
+            advanced.push({ focusMode: "auto" });
+            optimizations.push("auto focus");
+          }
+        }
+
+        if (capabilities.zoom
+          && typeof capabilities.zoom.min === "number"
+          && typeof capabilities.zoom.max === "number") {
+          const minZoom = capabilities.zoom.min;
+          const maxZoom = capabilities.zoom.max;
+          const currentZoom = typeof settings.zoom === "number" ? settings.zoom : minZoom;
+          const preferredZoom = isAppleMobileBrowser() ? 2 : 1.4;
+          const targetZoom = Math.min(maxZoom, Math.max(minZoom, Math.max(currentZoom, preferredZoom)));
+
+          if (targetZoom > currentZoom + 0.01) {
+            advanced.push({ zoom: targetZoom });
+            optimizations.push(targetZoom.toFixed(1) + "x zoom");
+          }
+        }
+
+        if (advanced.length > 0) {
+          await state.scanner.applyVideoConstraints({ advanced: advanced });
+        }
+
+        return optimizations;
+      } catch (error) {
+        return [];
+      }
     }
 
     async function getPreferredCamera() {
@@ -723,10 +848,11 @@
 
       try {
         if (!state.scanner) {
-          state.scanner = new Html5Qrcode("reader");
+          state.scanner = new Html5Qrcode("reader", createScannerConfig());
         }
 
         const camera = await getPreferredCamera();
+        const formats = getAllSupportedFormats();
 
         const scannerConfig = {
           fps: 8,
@@ -734,6 +860,10 @@
           qrbox: getBarcodeQrbox,
           rememberLastUsedCamera: true
         };
+
+        if (formats) {
+          scannerConfig.formatsToSupport = formats;
+        }
 
         await state.scanner.start(
           camera,
@@ -746,7 +876,12 @@
           }
         );
 
-        setStatus("Camera is live. Line up any barcode in view.", "");
+        const optimizations = await optimizeRunningCameraForBarcode();
+        const optimizationMessage = optimizations.length > 0
+          ? " Camera optimized with " + optimizations.join(" and ") + "."
+          : "";
+
+        setStatus("Camera is live. Line up any barcode in view." + optimizationMessage, "");
       } catch (error) {
         setRunning(false);
         if (state.scanner) {
@@ -897,6 +1032,8 @@
       }
     });
 
+    versionChip.textContent = APP_VERSION;
+    document.title = "IMEI Scanner " + APP_VERSION;
     loadItems();
   </script>
 </body>
