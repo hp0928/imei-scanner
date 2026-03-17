@@ -4,8 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#fbf5ea">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <title>IMEI Scanner</title>
   <style>
     :root {
@@ -654,14 +652,54 @@
       setStatus("Added " + normalized + ".", "success");
     }
 
+    function scoreCameraLabel(label) {
+      const normalized = String(label || "").toLowerCase();
+      let score = 0;
+
+      if (/back|rear|environment/.test(normalized)) {
+        score += 100;
+      }
+
+      if (/wide|1x|main|default/.test(normalized)) {
+        score += 35;
+      }
+
+      if (/ultra|macro|tele|front|selfie|truedepth/.test(normalized)) {
+        score -= 40;
+      }
+
+      return score;
+    }
+
+    function getBarcodeQrbox(viewfinderWidth, viewfinderHeight) {
+      const width = Math.max(220, Math.min(Math.floor(viewfinderWidth * 0.92), 380));
+      const height = Math.max(110, Math.min(Math.floor(viewfinderHeight * 0.22), 170));
+
+      return { width: width, height: height };
+    }
+
+    function isAppleMobileBrowser() {
+      const userAgent = navigator.userAgent || "";
+      const touchMac = navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+
+      return /iphone|ipad|ipod/i.test(userAgent) || touchMac;
+    }
+
     async function getPreferredCamera() {
+      if (isAppleMobileBrowser()) {
+        return { facingMode: "environment" };
+      }
+
       try {
         const cameras = await Html5Qrcode.getCameras();
         if (Array.isArray(cameras) && cameras.length > 0) {
-          const backCamera = cameras.find((camera) =>
-            /back|rear|environment/i.test(camera.label || "")
-          );
-          return backCamera ? backCamera.id : cameras[0].id;
+          const rankedCameras = cameras
+            .slice()
+            .sort((firstCamera, secondCamera) =>
+              scoreCameraLabel(secondCamera.label) - scoreCameraLabel(firstCamera.label)
+            );
+
+          return rankedCameras[0].id;
         }
       } catch (error) {
         return { facingMode: "environment" };
@@ -691,8 +729,9 @@
         const camera = await getPreferredCamera();
 
         const scannerConfig = {
-          fps: 10,
-          aspectRatio: 1.7778,
+          fps: 8,
+          disableFlip: true,
+          qrbox: getBarcodeQrbox,
           rememberLastUsedCamera: true
         };
 
